@@ -40,15 +40,41 @@ def calc_E(y):
             2*L1*L2*th1d*th2d*np.cos(th1-th2))
     return T + V
 
+def hsv_to_rgb(h, s, v):
+    # h = 0 to 1
+    # s = 0 to 1
+    # v = 0 to 1
+    # returns r, g, b in 0 to 255
+    r = 0
+    g = 0
+    b = 0
+
+    h_i = int(h*6)
+    f = h*6 - h_i
+    p = v * (1-s)
+    q = v * (1-f*s)
+    t = v * (1-(1-f)*s)
+    if h_i == 0: r, g, b = v, t, p
+    if h_i == 1: r, g, b = q, v, p
+    if h_i == 2: r, g, b = p, v, t
+    if h_i == 3: r, g, b = p, q, v
+    if h_i == 4: r, g, b = t, p, v
+    if h_i == 5: r, g, b = v, p, q
+    return int(r*255), int(g*255), int(b*255)
+
+
 # ----------------------- PENDULUM CLASS DEFINITON -----------------------
 class pendulum:
     def __init__(self, theta1, theta2):
 
         # Maximum time, time point spacings and the time grid (all in s).
-        tmax, dt = 30, 0.001
+        tmax, dt = 5, 0.01
         t = np.arange(0, tmax+dt, dt)
         # Initial conditions: theta1, dtheta1/dt, theta2, dtheta2/dt.
         y0 = np.array([math.radians(theta1), 0, math.radians(theta2), 0])
+        # theta angles represent positions on the screen (of all possible positions)
+        self.x_init = theta1 / 360 * 500
+        self.y_init = theta2 / 360 * 500
 
         # Do the numerical integration of the equations of motion
         y = odeint(deriv, y0, t, args=(L1, L2, m1, m2))
@@ -63,38 +89,44 @@ class pendulum:
         self.y2 = self.y1 - L2 * np.cos(theta2)
 
 
+    def pos_as_color(self,p1,p2):
+        # represents 2 positions as color
+        h = p1 / 500
+        s = p2 / 500
+        v = 1
+        return hsv_to_rgb(h,s,v)
+    
+
     def make_plot(self, screen, i):
-        # rods
-        pygame.draw.line(screen, (255,0,0), (0+250, 0+250), (self.x1[i]*100+250, -self.y1[i]*100+250), 3)
-        pygame.draw.line(screen, (255,0,0), (self.x1[i]*100+250, -self.y1[i]*100+250), (self.x2[i]*100+250, -self.y2[i]*100+250), 3)
-        #ax.plot([0, x1[i], x2[i]], [0, y1[i], y2[i]], lw=2, c='k')
-        # bobs
-        pygame.draw.circle(screen, (0,0,255), (0+250, 0+250), 5)
-        pygame.draw.circle(screen, (0,0,255), (self.x1[i]*100+250, -self.y1[i]*100+250), 5)
-        pygame.draw.circle(screen, (0,0,255), (self.x2[i]*100+250, -self.y2[i]*100+250), 5)
+        x = self.x2[i]*100+250
+        y = -self.y2[i]*100+250
+        color = self.pos_as_color(x,y)
+        # the pixel at the position on the screen gets colored
+        pygame.draw.circle(screen, (*color,255), (self.x_init, self.y_init), 7)
 
 # Make an image every di time points, corresponding to a frame rate of fps
 # frames per second.
 # Frame rate, s-1
 p = []
-for x in range(1,100):
-    p.append(pendulum(170+x/1000000,180+x/1000000))
+for x in range(1,50):
+    for y in range(1,50):
+        p.append(pendulum(x/50*360,y/50*360))
     print(x)
 
 i = 0
 clock = pygame.time.Clock()
 running = True
+fade_layer = pygame.Surface((500,500), pygame.SRCALPHA)
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
         
-    screen.fill((0, 0, 0))
-    #s = pygame.Surface((500,500), pygame.SRCALPHA)   # per-pixel alpha
-    #s.fill((0,0,0,1))                         # notice the alpha value in the color
-    #screen.blit(s, (0,0))
     for pend in p:
         pend.make_plot(screen, i)
+    # fade the screen layer
+    fade_layer.fill((0,0,0,1))
+    screen.blit(fade_layer, (0,0))
 
 
 
