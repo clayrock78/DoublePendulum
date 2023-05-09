@@ -1,14 +1,8 @@
-import pygame
-import sys
 import numpy as np
 from scipy.integrate import odeint
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
 import math
+import threading
 
-pygame.init()
-
-screen = pygame.display.set_mode([500, 500])
 
 # ----------------------- CONSTANTS AND CALCULATIONS -----------------------
 # Pendulum rod lengths (m), bob masses (kg).
@@ -18,6 +12,7 @@ m1, m2 = 1, 1
 g = 9.81
 
 def deriv(y, t, L1, L2, m1, m2):
+    #print("deriving")
     """Return the first derivatives of y = theta1, z1, theta2, z2."""
     theta1, z1, theta2, z2 = y
 
@@ -65,19 +60,22 @@ def hsv_to_rgb(h, s, v):
 
 # ----------------------- PENDULUM CLASS DEFINITON -----------------------
 class pendulum:
-    def __init__(self, theta1, theta2):
+    def __init__(self, x_init, y_init, talker=False):
+        self.talker = talker
+        self.x_init = x_init
+        self.y_init = y_init
+        self.calculated = False
 
+    def calc(self, width = 1000):
+        theta1 = self.x_init / width * 360
+        theta2 = self.y_init / width * 360
         # Maximum time, time point spacings and the time grid (all in s).
-        tmax, dt = 5, 0.01
-        t = np.arange(0, tmax+dt, dt)
+        tmax, dt = 10, 0.01
+        self.t = np.arange(0, tmax+dt, dt)
         # Initial conditions: theta1, dtheta1/dt, theta2, dtheta2/dt.
-        y0 = np.array([math.radians(theta1), 0, math.radians(theta2), 0])
-        # theta angles represent positions on the screen (of all possible positions)
-        self.x_init = theta1 / 360 * 500
-        self.y_init = theta2 / 360 * 500
-
+        self.y0 = np.array([math.radians(theta1), 0, math.radians(theta2), 0])
         # Do the numerical integration of the equations of motion
-        y = odeint(deriv, y0, t, args=(L1, L2, m1, m2))
+        y = odeint(deriv, self.y0, self.t, args=(L1, L2, m1, m2))
 
         # Unpack z and theta as a function of time
         theta1, theta2 = y[:,0], y[:,2]
@@ -88,50 +86,72 @@ class pendulum:
         self.x2 = self.x1 + L2 * np.sin(theta2)
         self.y2 = self.y1 - L2 * np.cos(theta2)
 
+        if self.talker:
+            print(self.x_init)
 
-    def pos_as_color(self,p1,p2):
-        # represents 2 positions as color
-        h = p1 / 500
-        s = p2 / 500
-        v = 1
-        return hsv_to_rgb(h,s,v)
+        return self.x2, self.y2, self.x_init, self.y_init
+
+
+def pos_as_color(p1,p2):
+    # represents 2 positions as color
+    h = p1 / width
+    s = p2 / width / 2 + 0.5
+    v = p2 / width / 2 + 0.5
+    return hsv_to_rgb(h,s,v)
     
 
-    def make_plot(self, screen, i):
-        x = self.x2[i]*100+250
-        y = -self.y2[i]*100+250
-        color = self.pos_as_color(x,y)
-        # the pixel at the position on the screen gets colored
-        pygame.draw.circle(screen, (*color,255), (self.x_init, self.y_init), 7)
+def make_plot(x2, y2, x_init, y_init):
+    # the position of the pendulum at time i is calculated
+    x = x2[i] * width / 5 + width / 2
+    y = y2[i] * width / 5 + width / 2
+    #print(x,y)
+    # the position is converted to a color
+    color = pos_as_color(x,y)
+    # the pixel at the position on the screen gets colored
+    screen[int(x_init),int(y_init)] = color
 
-# Make an image every di time points, corresponding to a frame rate of fps
-# frames per second.
-# Frame rate, s-1
-p = []
-for x in range(1,50):
-    for y in range(1,50):
-        p.append(pendulum(x/50*360,y/50*360))
-    print(x)
+if __name__ == "__main__":
+    width = 1000
+    screen = np.zeros((width,width,3),dtype=np.uint8)
+    frames = []
 
-i = 0
-clock = pygame.time.Clock()
-running = True
-fade_layer = pygame.Surface((500,500), pygame.SRCALPHA)
-while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+    pends = []
+
+    # ----------------------- INITIALIZATION -----------------------
+    # create pendulum objects
+    for x in range(width):
+        for y in range(width):
+            pends.append(pendulum(x,y,y==0))
         
-    for pend in p:
-        pend.make_plot(screen, i)
-    # fade the screen layer
-    fade_layer.fill((0,0,0,1))
-    screen.blit(fade_layer, (0,0))
+    #for pend in pends:
+    #    pend.calc()
+
+    print("starting pool")
+    # create thread pool
+    from multiprocessing import Pool
+
+    with Pool(4) as p:
+        stuff = p.map(pendulum.calc, pends)
+    print("done")
 
 
+    # ----------------------- MAIN LOOP -----------------------
+    i = 0
+    running = True
+    while running:
+        try:
+            for s in stuff:
+                make_plot(*s)
+            frames.append(screen.copy())
+            i+= 1
+        except:
+            running = False
 
-    pygame.display.flip()
-    clock.tick(1000)
-    i += 1
-
-pygame.quit()
+    # save frames as video
+    import cv2
+    height, width, layers = frames[0].shape
+    video = cv2.VideoWriter('video_test.mp4', 0, 60, (width,height))
+    for frame in frames:
+        video.write(frame)
+    cv2.destroyAllWindows()
+    video.release()
