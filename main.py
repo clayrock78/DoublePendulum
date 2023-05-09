@@ -1,102 +1,88 @@
+import cv2
 import numpy as np
 from scipy.integrate import odeint
-import math
-import threading
+import numexpr as ne 
+from time import perf_counter
 
+def hsv_to_rgb(h,s,v):
+    # works with numpy arrays
+    r = np.zeros(h.shape)
+    g = np.zeros(h.shape)
+    b = np.zeros(h.shape)
 
-# ----------------------- CONSTANTS AND CALCULATIONS -----------------------
-# Pendulum rod lengths (m), bob masses (kg).
-L1, L2 = 1, 1
-m1, m2 = 1, 1
-# The gravitational acceleration (m.s-2).
-g = 9.81
-
-def deriv(y, t, L1, L2, m1, m2):
-    #print("deriving")
-    """Return the first derivatives of y = theta1, z1, theta2, z2."""
-    theta1, z1, theta2, z2 = y
-
-    c, s = np.cos(theta1-theta2), np.sin(theta1-theta2)
-
-    theta1dot = z1
-    z1dot = (m2*g*np.sin(theta2)*c - m2*s*(L1*z1**2*c + L2*z2**2) -
-             (m1+m2)*g*np.sin(theta1)) / L1 / (m1 + m2*s**2)
-    theta2dot = z2
-    z2dot = ((m1+m2)*(L1*z1**2*s - g*np.sin(theta2) + g*np.sin(theta1)*c) + 
-             m2*L2*z2**2*s*c) / L2 / (m1 + m2*s**2)
-    return theta1dot, z1dot, theta2dot, z2dot
-
-def calc_E(y):
-    """Return the total energy of the system."""
-
-    th1, th1d, th2, th2d = y.T
-    V = -(m1+m2)*L1*g*np.cos(th1) - m2*L2*g*np.cos(th2)
-    T = 0.5*m1*(L1*th1d)**2 + 0.5*m2*((L1*th1d)**2 + (L2*th2d)**2 +
-            2*L1*L2*th1d*th2d*np.cos(th1-th2))
-    return T + V
-
-def hsv_to_rgb(h, s, v):
-    # h = 0 to 1
-    # s = 0 to 1
-    # v = 0 to 1
-    # returns r, g, b in 0 to 255
-    r = 0
-    g = 0
-    b = 0
-
-    h_i = int(h*6)
+    h_i = (h*6).astype(int)
     f = h*6 - h_i
     p = v * (1-s)
     q = v * (1-f*s)
     t = v * (1-(1-f)*s)
-    if h_i == 0: r, g, b = v, t, p
-    if h_i == 1: r, g, b = q, v, p
-    if h_i == 2: r, g, b = p, v, t
-    if h_i == 3: r, g, b = p, q, v
-    if h_i == 4: r, g, b = t, p, v
-    if h_i == 5: r, g, b = v, p, q
-    return int(r*255), int(g*255), int(b*255)
+    r[h_i==0] = v[h_i==0]
+    g[h_i==0] = t[h_i==0]
+    b[h_i==0] = p[h_i==0]
+    r[h_i==1] = q[h_i==1]
+    g[h_i==1] = v[h_i==1]
+    b[h_i==1] = p[h_i==1]
+    r[h_i==2] = p[h_i==2]
+    g[h_i==2] = v[h_i==2]
+    b[h_i==2] = t[h_i==2]
+    r[h_i==3] = p[h_i==3]
+    g[h_i==3] = q[h_i==3]
+    b[h_i==3] = v[h_i==3]
+    r[h_i==4] = t[h_i==4]
+    g[h_i==4] = p[h_i==4]
+    b[h_i==4] = v[h_i==4]
+    r[h_i==5] = v[h_i==5]
+    g[h_i==5] = p[h_i==5]
+    b[h_i==5] = q[h_i==5]
+    return np.array([r*255, g*255, b*255]).astype(int)
+
 
 
 # ----------------------- PENDULUM CLASS DEFINITON -----------------------
-class pendulum:
-    def __init__(self, x_init, y_init, talker=False):
-        self.talker = talker
-        self.x_init = x_init
-        self.y_init = y_init
-        self.calculated = False
 
-    def calc(self, width = 1000):
-        theta1 = self.x_init / width * 360
-        theta2 = self.y_init / width * 360
-        # Maximum time, time point spacings and the time grid (all in s).
-        tmax, dt = 10, 0.01
-        self.t = np.arange(0, tmax+dt, dt)
-        # Initial conditions: theta1, dtheta1/dt, theta2, dtheta2/dt.
-        self.y0 = np.array([math.radians(theta1), 0, math.radians(theta2), 0])
-        # Do the numerical integration of the equations of motion
-        y = odeint(deriv, self.y0, self.t, args=(L1, L2, m1, m2))
+def RK4(t, y, h, f):  
+    
+    #Runge Kutta standard calculations
+    k1 = f(t, y)
+    k2 = f(t + h/2, y + h/2 * k1)
+    k3 = f(t + h/2, y + h/2 * k2)
+    k4 = f(t + h, y + h * k3)    
 
-        # Unpack z and theta as a function of time
-        theta1, theta2 = y[:,0], y[:,2]
+    return ne.evaluate('1/6*(k1 + 2 * k2 + 2 * k3 + k4)')
 
-        # Convert to Cartesian coordinates of the two bob positions.
-        self.x1 = L1 * np.sin(theta1)
-        self.y1 = -L1 * np.cos(theta1)
-        self.x2 = self.x1 + L2 * np.sin(theta2)
-        self.y2 = self.y1 - L2 * np.cos(theta2)
+    
+def RHS(t, y):
+    # np array of shape (?,4) to 4 numpy arrays of shape (?)
+    theta_1, theta_2, w1, w2 = y
+    ################################
+    #Critical physical Parameters
+    g = 15
+    l1 = 1
+    l2 = 1
+    m1 = 1
+    m2 = 1
+    delta_theta = theta_1 - theta_2
+    ################################
+    
+    #Writing the system of ODES.
+    f0 = w1
+    f1 = w2
 
-        if self.talker:
-            print(self.x_init)
 
-        return self.x2, self.y2, self.x_init, self.y_init
+    f2 = '(m2*l1*w1**2*sin(2*delta_theta) + 2*m2*l2*w2**2*sin(delta_theta) + 2*g*m2*cos(theta_2)*sin(delta_theta) + 2*g*m1*sin(theta_1))/(-2*l1*(m1 + m2*sin(delta_theta)**2))'
+    f2 = ne.evaluate(f2)
+    
+    f3 = '(m2*l2*w2**2*sin(2*delta_theta) + 2*(m1 + m2)*l1*w1**2*sin(delta_theta) + 2*g*(m1 + m2)*cos(theta_1)*sin(delta_theta))/(2*l2*(m1 + m2*sin(delta_theta)**2))'
+    f3 = ne.evaluate(f3)
+    
+    return np.array([f0, f1, f2, f3])
+
 
 
 def pos_as_color(p1,p2):
     # represents 2 positions as color
-    h = p1 / width
-    s = p2 / width / 2 + 0.5
-    v = p2 / width / 2 + 0.5
+    h = ne.evaluate('p1 / width * .7 + .3')
+    s = ne.evaluate('p2 / width / 2 + 0.5')
+    v = ne.evaluate('p2 / width / 2 + 0.5')
     return hsv_to_rgb(h,s,v)
     
 
@@ -110,48 +96,42 @@ def make_plot(x2, y2, x_init, y_init):
     # the pixel at the position on the screen gets colored
     screen[int(x_init),int(y_init)] = color
 
+def angles_as_pos(a1, a2):
+    # represents 2 angles as position
+    x1 = ne.evaluate('1 * sin(a1)')
+    y1 = ne.evaluate('-1 * cos(a1)')
+    x2 = ne.evaluate('x1 + 1 * sin(a2)')
+    y2 = ne.evaluate('y1 - 1 * cos(a2)')
+    x2 = ne.evaluate('x2 * width / 5 + width / 2')
+    y2 = ne.evaluate('y2 * width / 5 + width / 2')
+    return x2, y2
+
 if __name__ == "__main__":
-    width = 1000
+    width = 500
     screen = np.zeros((width,width,3),dtype=np.uint8)
     frames = []
 
-    pends = []
-
-    # ----------------------- INITIALIZATION -----------------------
-    # create pendulum objects
-    for x in range(width):
-        for y in range(width):
-            pends.append(pendulum(x,y,y==0))
-        
-    #for pend in pends:
-    #    pend.calc()
-
-    print("starting pool")
-    # create thread pool
-    from multiprocessing import Pool
-
-    with Pool(4) as p:
-        stuff = p.map(pendulum.calc, pends)
-    print("done")
-
-
-    # ----------------------- MAIN LOOP -----------------------
-    i = 0
-    running = True
-    while running:
-        try:
-            for s in stuff:
-                make_plot(*s)
-            frames.append(screen.copy())
-            i+= 1
-        except:
-            running = False
-
-    # save frames as video
-    import cv2
-    height, width, layers = frames[0].shape
-    video = cv2.VideoWriter('video_test.mp4', 0, 60, (width,height))
-    for frame in frames:
-        video.write(frame)
+    # time interval
+    t = 0 
+    T = 5
+    n = 300
+    # initial conditions
+    # y is a 4x(width**2) array of initial conditions these initial conditions represent the initial angles and angular velocities of the pendulums
+    a1 = np.linspace(0, 2*np.pi, width)
+    a2 = np.linspace(0, 2*np.pi, width)
+    y = np.meshgrid(a1, a2)
+    y = np.array([y[0].flatten(), y[1].flatten(), np.zeros(width**2), np.zeros(width**2)])
+    
+    #Step size
+    h  = (T - t)/n
+    
+    height, width, layers = (width,width,3)
+    video = cv2.VideoWriter('video_np.mp4', 0, 60, (width,height))
+    while t < T:
+        screen = pos_as_color(*angles_as_pos(y[0],y[1]))
+        video.write(screen.T.copy().reshape((height,width,3)).astype(np.uint8))
+        y = y + h * RK4(t, y, h, RHS)
+        t = t + h
+        print(f"{(t)/T*100:.2f} %")
     cv2.destroyAllWindows()
     video.release()
